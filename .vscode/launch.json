@@ -1,0 +1,71 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug server",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=server",
+                    "--package=hole-punching"
+                ],
+                "filter": {
+                    "name": "server",
+                    "kind": "bin"
+                }
+            },
+            "args": ["172.30.71.225:21473"],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug peer (listen)",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=peer",
+                    "--package=hole-punching"
+                ],
+                "filter": {
+                    "name": "peer",
+                    "kind": "bin"
+                }
+            },
+            "args": [
+                "listen", 
+                "--server", "127.0.0.1:21473",
+                "--local-id", "listen-1"
+            ],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug peer (connect)",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=peer",
+                    "--package=hole-punching"
+                ],
+                "filter": {
+                    "name": "peer",
+                    "kind": "bin"
+                }
+            },
+            "args": [
+                "connect", 
+                "--server", "127.0.0.1:21473",
+                "--local-id", "connect-1",
+                "--remote-id", "listen-1"
+            ],
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}
