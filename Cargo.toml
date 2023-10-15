@@ -17,4 +17,9 @@ clap = { version = "4.4.6", features = ["cargo", "derive"] }
 net = "0.1.0"
 serde = { version = "1.0.188", features = ["derive"] }
 tokio = { version = "1.33.0", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
 tokio-tun = "0.9.1"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+wintun = "0.3.2"
