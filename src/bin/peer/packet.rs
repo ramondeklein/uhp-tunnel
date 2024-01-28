@@ -30,15 +30,6 @@ pub fn print_packet(prefix: &str, buf: &[u8]) {
             "ICMP" => {
                 let (typ, code) = match body[0] {
                     0 => ("echo reply", ""),
-                    3 => ("destination unreachable", match body[1] {
-                        0 => "net unreachable",
-                        1 => "host unreachable",
-                        2 => "protocol unreachable",
-                        3 => "port unreachable",
-                        4 => "fragmentation needed but DF bit set",
-                        5 => "source route failed",
-                        _ => "???",
-                    }),
                     4 => ("source quench", match body[1] {
                         0 => "congestion control",
                         _ => "???",

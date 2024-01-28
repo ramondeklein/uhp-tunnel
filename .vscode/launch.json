@@ -19,7 +19,7 @@
                     "kind": "bin"
                 }
             },
-            "args": ["172.30.71.225:21473"],
+            "args": ["127.0.0.1:21473"],
             "cwd": "${workspaceFolder}"
         },
         {
@@ -40,7 +40,7 @@
             "args": [
                 "listen", 
                 "--server", "127.0.0.1:21473",
-                "--local-id", "listen-1"
+                "--local-id", "LISTEN"
             ],
             "cwd": "${workspaceFolder}"
         },
@@ -61,10 +61,10 @@
             },
             "args": [
                 "connect", 
-                "--server", "192.168.1.2:21473",
-                "--local-id", "dell",
-                "--remote-id", "nuc",
-                "--ip", "10.0.2.10"
+                "--server", "127.0.0.1:21473",
+                "--local-id", "CONNECT",
+                "--remote-id", "LISTEN",
+                "--tunnel-endpoint", "192.168.1.1:80"
             ],
             "cwd": "${workspaceFolder}"
         }

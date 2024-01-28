@@ -1,7 +1,9 @@
-use std::{error::Error, env, time::Duration, net::{SocketAddr, Ipv4Addr}, sync::Arc};
-use tokio::{io::AsyncReadExt, time::sleep, net::UdpSocket, io::AsyncWriteExt};
+use std::{error::Error, net::{SocketAddr, Ipv4Addr}, sync::Arc};
+use tokio::{io::AsyncReadExt, net::UdpSocket, io::AsyncWriteExt};
 
-async fn tuntap_loop(socket: UdpSocket, remote_addr: SocketAddr, our_ip: Option<&Ipv4Addr>) -> Result<(), Box<dyn Error>> {
+use crate::packet::print_packet;
+
+pub async fn tuntap_loop(socket: UdpSocket, remote_addr: SocketAddr, our_ip: Option<&Ipv4Addr>) -> Result<(), Box<dyn Error>> {
     let mut tun_builder = tokio_tun::Tun::builder()
         .name("")   // set by kernel
         .tap(false)
@@ -46,7 +48,7 @@ async fn tuntap_loop(socket: UdpSocket, remote_addr: SocketAddr, our_ip: Option<
 
         let buf = &buf[..r];
         match tw.write(&buf).await {
-            Ok(s)  => print_packet("-> ", &buf),
+            Ok(_)  => print_packet("-> ", &buf),
             Err(e) => eprintln!("Unable to write {} bytes to the TUN adapter (ignored): {}", r, e),
         };
         
