@@ -1,16 +1,16 @@
 pub mod client;
 pub mod packet;
 
-use async_std::net::{TcpListener, TcpStream};
-use async_std::prelude::*;
+use tokio::io::{split, AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
+use tokio::net::{TcpListener, TcpStream};
 use client::{connect, listen};
 use futures::executor::block_on;
 use futures::{future::FutureExt, pin_mut, select};
 use quinn::{IdleTimeout, RecvStream, SendStream, VarInt};
+use tokio::time::sleep;
 use std::net::UdpSocket;
 use std::thread;
 use std::{env, error::Error, net::SocketAddr, sync::Arc, time::Duration};
-use tokio::time::sleep;
 
 #[tokio::main]
 async fn main() {
@@ -124,11 +124,11 @@ async fn run() -> Result<(), Box<dyn Error>> {
                             let quic_id = quic_stream.0.id().index();
                             println!("{}/{}: got a new QUIC stream", remote_addr, quic_id);
                             match TcpStream::connect(&remote_peer.tunnel_endpoint).await {
-                                Ok(tcp_stream) => {
+                                Ok(mut tcp_stream) => {
                                     println!("{}/{}: connected to connect to '{}'", remote_addr, quic_id, remote_peer.tunnel_endpoint);
                                     thread::spawn(move || {
                                         let msg = format!("{}/{}: ", remote_addr, quic_id);
-                                        let (qtt, ttq) = block_on(forward_traffic(&msg, tcp_stream, quic_stream));
+                                        let (qtt, ttq) = block_on(forward_traffic(&msg, &mut tcp_stream, quic_stream));
                                         println!("{}/{}: finished ({} bytes read, {} bytes written)", remote_addr, quic_id, qtt, ttq);                
                                     });
                                 }
@@ -182,10 +182,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
             let tcp_listener = TcpListener::bind(listen_addr).await?;
             println!("{}: waiting for TCP to accept on {}", remote_addr, listen_addr);
 
-            let mut incoming = tcp_listener.incoming();
-            while let Some(stream) = incoming.next().await {
-                let tcp_stream = stream.unwrap();
-                let peer_addr = tcp_stream.peer_addr().unwrap();
+            while let Ok((mut tcp_stream, peer_addr)) = tcp_listener.accept().await {
                 println!("{}: accepted TCP connection from {}", remote_addr, peer_addr);
 
                 let quic_stream = connection.open_bi().await.unwrap();
@@ -193,7 +190,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 println!("{}/{}: opened QUIC connection", remote_addr, quic_id);
                 thread::spawn(move || {
                     let msg = format!("{}/{}: ", remote_addr, quic_id);
-                    let (qtt, ttq) = block_on(forward_traffic(&msg, tcp_stream, quic_stream));
+                    let (qtt, ttq) = block_on(forward_traffic(&msg, &mut tcp_stream, quic_stream));
                     println!("{}/{}: finished ({} bytes read, {} bytes written)", remote_addr, quic_id, qtt, ttq);                
                 });
             }
@@ -204,12 +201,12 @@ async fn run() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-async fn forward_traffic(name: &String, tcp_stream: TcpStream, quic_stream: (SendStream, RecvStream)) -> (usize, usize) {
+async fn forward_traffic(name: &String, tcp_stream: &mut TcpStream, quic_stream: (SendStream, RecvStream)) -> (usize, usize) {
     let (s, r) = quic_stream;
-    let (ts, tr) = (&tcp_stream, &tcp_stream);
+    let (mut tr, mut ts) = split(tcp_stream);
 
-    let qtt = quic_to_tcp(name, r, ts).fuse();
-    let ttq = tcp_to_quic(name, tr, s).fuse();
+    let qtt = quic_to_tcp(name, r, &mut ts).fuse();
+    let ttq = tcp_to_quic(name, &mut tr, s).fuse();
     pin_mut!(qtt, ttq);
     select! {
         _ = qtt => {},
@@ -218,7 +215,7 @@ async fn forward_traffic(name: &String, tcp_stream: TcpStream, quic_stream: (Sen
     return (0, 0);  // TODO: return byte counts
 }
 
-async fn quic_to_tcp(name: &String, mut r: RecvStream, mut ts: &TcpStream) -> usize {
+async fn quic_to_tcp(name: &String, mut r: RecvStream, ts: &mut WriteHalf<&mut TcpStream>) -> usize {
     let mut bytes: usize = 0;
     let mut rx_bytes = [0u8; 1000];
 
@@ -247,7 +244,7 @@ async fn quic_to_tcp(name: &String, mut r: RecvStream, mut ts: &TcpStream) -> us
     }
 }
 
-async fn tcp_to_quic(name: &String, mut tr: &TcpStream, mut s: SendStream) -> usize {
+async fn tcp_to_quic(name: &String, tr: &mut ReadHalf<&mut TcpStream>, mut s: SendStream) -> usize {
     let mut bytes: usize = 0;
     let mut rx_bytes = [0u8; 1000];
     loop {
