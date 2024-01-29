@@ -1,16 +1,16 @@
 pub mod client;
 pub mod packet;
 
-use tokio::io::{split, AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
-use tokio::net::{TcpListener, TcpStream};
 use client::{connect, listen};
 use futures::executor::block_on;
 use futures::{future::FutureExt, pin_mut, select};
 use quinn::{IdleTimeout, RecvStream, SendStream, VarInt};
-use tokio::time::sleep;
 use std::net::UdpSocket;
 use std::thread;
 use std::{env, error::Error, net::SocketAddr, sync::Arc, time::Duration};
+use tokio::io::{split, AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::time::sleep;
 
 #[tokio::main]
 async fn main() {
@@ -125,15 +125,28 @@ async fn run() -> Result<(), Box<dyn Error>> {
                             println!("{}/{}: got a new QUIC stream", remote_addr, quic_id);
                             match TcpStream::connect(&remote_peer.tunnel_endpoint).await {
                                 Ok(mut tcp_stream) => {
-                                    println!("{}/{}: connected to connect to '{}'", remote_addr, quic_id, remote_peer.tunnel_endpoint);
+                                    println!(
+                                        "{}/{}: connected to connect to '{}'",
+                                        remote_addr, quic_id, remote_peer.tunnel_endpoint
+                                    );
                                     thread::spawn(move || {
                                         let msg = format!("{}/{}: ", remote_addr, quic_id);
-                                        let (qtt, ttq) = block_on(forward_traffic(&msg, &mut tcp_stream, quic_stream));
-                                        println!("{}/{}: finished ({} bytes read, {} bytes written)", remote_addr, quic_id, qtt, ttq);                
+                                        let (qtt, ttq) = block_on(forward_traffic(
+                                            &msg,
+                                            &mut tcp_stream,
+                                            quic_stream,
+                                        ));
+                                        println!(
+                                            "{}/{}: finished ({} bytes read, {} bytes written)",
+                                            remote_addr, quic_id, qtt, ttq
+                                        );
                                     });
                                 }
                                 Err(e) => {
-                                    println!("{}/{}: unable to connect to '{}': {}", remote_addr, quic_id, remote_peer.tunnel_endpoint, e);
+                                    println!(
+                                        "{}/{}: unable to connect to '{}': {}",
+                                        remote_addr, quic_id, remote_peer.tunnel_endpoint, e
+                                    );
                                     connection.close(VarInt::from_u32(0), e.to_string().as_bytes())
                                 }
                             }
@@ -160,7 +173,10 @@ async fn run() -> Result<(), Box<dyn Error>> {
             let remote_peer =
                 connect(&socket, server, local_id, remote_id, tunnel_endpoint).await?;
             sleep(Duration::from_millis(1000)).await; // wait one second to ensure both sides punched holes
-            println!("connected to '{}' (end-point: {})", remote_peer.id, remote_peer.addr);
+            println!(
+                "connected to '{}' (end-point: {})",
+                remote_peer.id, remote_peer.addr
+            );
 
             let runtime = quinn::default_runtime().ok_or_else(|| {
                 std::io::Error::new(std::io::ErrorKind::Other, "no async runtime found")
@@ -180,10 +196,16 @@ async fn run() -> Result<(), Box<dyn Error>> {
 
             let listen_addr = SocketAddr::from(([127, 0, 0, 1], 21473));
             let tcp_listener = TcpListener::bind(listen_addr).await?;
-            println!("{}: waiting for TCP to accept on {}", remote_addr, listen_addr);
+            println!(
+                "{}: waiting for TCP to accept on {}",
+                remote_addr, listen_addr
+            );
 
             while let Ok((mut tcp_stream, peer_addr)) = tcp_listener.accept().await {
-                println!("{}: accepted TCP connection from {}", remote_addr, peer_addr);
+                println!(
+                    "{}: accepted TCP connection from {}",
+                    remote_addr, peer_addr
+                );
 
                 let quic_stream = connection.open_bi().await.unwrap();
                 let quic_id = quic_stream.0.id().index();
@@ -191,7 +213,10 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 thread::spawn(move || {
                     let msg = format!("{}/{}: ", remote_addr, quic_id);
                     let (qtt, ttq) = block_on(forward_traffic(&msg, &mut tcp_stream, quic_stream));
-                    println!("{}/{}: finished ({} bytes read, {} bytes written)", remote_addr, quic_id, qtt, ttq);                
+                    println!(
+                        "{}/{}: finished ({} bytes read, {} bytes written)",
+                        remote_addr, quic_id, qtt, ttq
+                    );
                 });
             }
         }
@@ -201,72 +226,77 @@ async fn run() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-async fn forward_traffic(name: &String, tcp_stream: &mut TcpStream, quic_stream: (SendStream, RecvStream)) -> (usize, usize) {
-    let (s, r) = quic_stream;
-    let (mut tr, mut ts) = split(tcp_stream);
-
-    let qtt = quic_to_tcp(name, r, &mut ts).fuse();
-    let ttq = tcp_to_quic(name, &mut tr, s).fuse();
-    pin_mut!(qtt, ttq);
-    select! {
-        _ = qtt => {},
-        _ = ttq => {},
+async fn forward_traffic(
+    name: &String,
+    tcp_stream: &mut TcpStream,
+    quic_stream: (SendStream, RecvStream),
+) -> (usize, usize) {
+    let (mut bytes_read, mut bytes_written) = (0usize, 0usize);
+    {
+        let (s, r) = quic_stream;
+        let (mut tr, mut ts) = split(tcp_stream);
+        let qtt = quic_to_tcp(name, r, &mut ts, &mut bytes_read).fuse();
+        let ttq = tcp_to_quic(name, &mut tr, s, &mut bytes_written).fuse();
+        pin_mut!(qtt, ttq);
+        select! {
+            _ = qtt => {},
+            _ = ttq => {},
+        }
     }
-    return (0, 0);  // TODO: return byte counts
+
+    return (bytes_read, bytes_written);
 }
 
-async fn quic_to_tcp(name: &String, mut r: RecvStream, ts: &mut WriteHalf<&mut TcpStream>) -> usize {
-    let mut bytes: usize = 0;
+async fn quic_to_tcp(
+    name: &String,
+    mut r: RecvStream,
+    ts: &mut WriteHalf<&mut TcpStream>,
+    bytes: &mut usize,
+) {
     let mut rx_bytes = [0u8; 1000];
 
     loop {
         match r.read(&mut rx_bytes).await {
-            Ok(Some(n)) => {
-                match ts.write_all(&rx_bytes[..n]).await {
-                    Ok(_) => {
-                        println!("{}QUIC->TCP - {} bytes written to TCP", name, n);
-                        bytes = bytes + n;
-                    }
-                    Err(e) => {
-                        println!("{}QUIC->TCP - Error writing: {}", name, e);
-                        return bytes;
-                    }
+            Ok(Some(n)) => match ts.write_all(&rx_bytes[..n]).await {
+                Ok(_) => *bytes = *bytes + n,
+                Err(e) => {
+                    println!("{}QUIC->TCP - Error writing: {}", name, e);
+                    return;
                 }
-            }
-            Ok(None) => {
-                return bytes;
-            }
+            },
+            Ok(None) => return,
             Err(e) => {
                 println!("{}QUIC->TCP - Error reading: {}", name, e);
-                return bytes;
+                return;
             }
         }
     }
 }
 
-async fn tcp_to_quic(name: &String, tr: &mut ReadHalf<&mut TcpStream>, mut s: SendStream) -> usize {
-    let mut bytes: usize = 0;
+async fn tcp_to_quic(
+    name: &String,
+    tr: &mut ReadHalf<&mut TcpStream>,
+    mut s: SendStream,
+    bytes: &mut usize,
+) {
     let mut rx_bytes = [0u8; 1000];
     loop {
         match tr.read(&mut rx_bytes).await {
             Ok(n) => {
                 if n == 0 {
-                    return bytes;
+                    return;
                 }
                 match s.write_all(&rx_bytes[..n]).await {
-                    Ok(_) => {
-                        println!("{}TCP->QUIC - {} bytes written to QUIC", name, n);
-                        bytes = bytes + n;
-                    }
+                    Ok(_) => *bytes = *bytes + n,
                     Err(e) => {
                         println!("{}TCP->QUIC - Error writing: {}", name, e);
-                        return bytes;
+                        return;
                     }
                 }
             }
             Err(e) => {
                 println!("{}TCP->QUIC - Error reading: {}", name, e);
-                return bytes;
+                return;
             }
         }
     }
