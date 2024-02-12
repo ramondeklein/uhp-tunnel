@@ -1,16 +1,17 @@
-use std::{net::{SocketAddr, UdpSocket}, error::Error};
+use std::error::Error;
+use quinn::SendStream;
 
 use super::protocol::ProtocolCommand;
 
 /// Send an error message to the given peer
-pub fn send_error(socket: &UdpSocket, addr: &SocketAddr, msg: &str) -> Result<(), Box<dyn Error>> {
-    send_command(&socket, addr, &ProtocolCommand::Error(String::from(msg)))
+pub async fn send_error(send_stream: &mut SendStream, msg: &str) -> Result<(), Box<dyn Error>> {
+    send_command(send_stream, &ProtocolCommand::Error(String::from(msg))).await
 }
 
 /// Send a protocol message to the given peer
-pub fn send_command(socket: &UdpSocket, addr: &SocketAddr, cmd: &ProtocolCommand) -> Result<(), Box<dyn Error>> {
+pub async fn send_command(send_stream: &mut SendStream, cmd: &ProtocolCommand) -> Result<(), Box<dyn Error>> {
     let buf: Vec<u8> = bincode::serialize(&cmd).unwrap();
-    socket.send_to(&buf, addr)?;
+    send_stream.write_all(&buf).await?;
     Ok(())
 }
 

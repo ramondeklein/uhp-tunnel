@@ -39,8 +39,6 @@ sequenceDiagram
 
 At the end of this sequence, both peer A and peer B have updated NAT tables that allow traffic from each other. UDP packets can be send directly to the peer without passing the server.
 
-**NOTE:** The order of the *Say Hi* requests is not fixed, so the peers should keep sending these requests, until the connection has been established. If the request has been established, then they may receive another *Say Hi* request before actually getting the actual data that needs to be exchanged.
-
 ## Secure communication
 Hole punching is a nice side-effect of UDP, but the protocol has some additional challenges:
 1. All data is sent in plain text.
@@ -48,7 +46,7 @@ Hole punching is a nice side-effect of UDP, but the protocol has some additional
 3. No multiplexing.
 4. No keep-alive mechanism.
 
-Fortunately, there is a protocol that works on top of UDP and does provide all this functionality and is called [QUIC](https://en.wikipedia.org/wiki/QUIC) (formerly an acronym for *Quick UDP Internet Connections*). QUIC is a client/server protocol, so one peer should act like a server and the other peer as a client.
+Fortunately, there is a protocol that works on top of UDP and does provide all this functionality and is called [QUIC](https://en.wikipedia.org/wiki/QUIC) (formerly an acronym for *Quick UDP Internet Connections*). QUIC is a client/server protocol, so one peer should act like a server and the other peer as a client. Because QUIC supports multiplexing, it is possible to tunnel multiple connections via a single UDP tunnel. This is especially useful when tunneling HTTP traffic that often requires a lot of parallel channels.
 
 **IMPORTANT** The current method of exchanging certificates is not secure (all peer/server traffic is unencrypted) and is used to provide a proof-of-concept that UDP hole punching can be used. Using this in a production scenario requires a secure certificate exchange.
 
