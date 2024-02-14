@@ -4,7 +4,7 @@ use std::{collections::HashMap, error::Error, net::SocketAddr};
 use hole_punching::udp_hole_punching::common::{send_command, send_error, CTRL_SIZE};
 use hole_punching::udp_hole_punching::protocol::ProtocolCommand;
 use quinn::SendStream;
-use rustls::{Certificate, PrivateKey};
+use rustls::server::ResolvesServerCert;
 use tokio::sync::Mutex;
 
 /// Peer structure holding all the information of an advertised peer.
@@ -41,13 +41,12 @@ impl Server {
     ///
     /// This method actually creates a UDP socket on the given endpoint
     /// and starts listening for incoming commands.
-    pub async fn run(
-        &self,
-        addr: SocketAddr,
-        certs: Vec<Certificate>,
-        priv_key: PrivateKey,
-    ) -> Result<(), Box<dyn Error>> {
-        let server_config = quinn::ServerConfig::with_single_cert(certs, priv_key)?;
+    pub async fn run(&self, addr: SocketAddr, cert_resolver: Arc<dyn ResolvesServerCert>) -> Result<(), Box<dyn Error>> {
+        let crypto = rustls::ServerConfig::builder()
+            .with_safe_defaults()
+            .with_no_client_auth()
+            .with_cert_resolver(cert_resolver);
+        let server_config = quinn::ServerConfig::with_crypto(Arc::new(crypto));
         let endpoint = quinn::Endpoint::server(server_config, addr)?;
 
         println!("waiting for an incoming QUIC connection");

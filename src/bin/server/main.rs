@@ -1,9 +1,11 @@
 pub mod server;
+pub mod cert_resolver;
 
+use cert_resolver::CertResolver;
 use hole_punching::udp_hole_punching::protocol::DEFAULT_SERVER_PORT;
-use rustls::{Certificate, PrivateKey};
 use server::Server;
-use std::{error::Error, fs::File, io::BufReader, process};
+use tokio::signal::unix::{signal, SignalKind};
+use std::{error::Error, process, sync::Arc};
 
 #[tokio::main]
 async fn main() {
@@ -57,24 +59,22 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let certificate_file = args.get_one::<String>("certificate-file").unwrap();
     let private_key_file = args.get_one::<String>("private-key-file").unwrap();
 
-    let certs = load_certs(&certificate_file)?;
-    let private_key = load_private_key(private_key_file)?;
+    let cert_resolver = Arc::new(CertResolver::new(certificate_file.clone(), private_key_file.clone()));
+    cert_resolver.reload().await?;
+
+    let mut sighup = signal(SignalKind::hangup())?;
+    let copy = cert_resolver.clone();
+    tokio::spawn(async move {
+        loop {
+            sighup.recv().await;
+            match copy.reload().await {
+                Ok(_) => {},
+                Err(e) => eprintln!("error loading certificates: {}", e)
+            }
+        }
+    });
 
     let server = Server::new();
-    server.run(*bind, certs, private_key).await?;
+    server.run(*bind, cert_resolver).await?;
     Ok(())
-}
-
-fn load_certs(filename: &String) -> Result<Vec<Certificate>, Box<dyn Error>> {
-    let cert_file = File::open(filename)?;
-    let mut reader = BufReader::new(cert_file);
-    let certs = rustls_pemfile::certs(&mut reader).map(|c| Certificate(c.unwrap().as_ref().to_vec())).collect();
-    Ok(certs)
-}
-
-fn load_private_key(filename: &String) -> Result<PrivateKey, Box<dyn Error>> {
-    let cert_file = File::open(filename)?;
-    let mut reader = BufReader::new(cert_file);
-    let private_key = PrivateKey(rustls_pemfile::private_key(&mut reader)?.unwrap().secret_der().to_vec());
-    Ok(private_key)
 }
