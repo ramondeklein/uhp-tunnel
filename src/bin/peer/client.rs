@@ -75,7 +75,11 @@ pub async fn connect(send_stream: &mut SendStream, recv_stream: &mut RecvStream,
 
     match bincode::deserialize::<ProtocolCommand>(&buf)? {
         ProtocolCommand::ConnectResponse { id, addr, pub_cert } => {
+            println!("remote peer '{}' is on {}", id, addr);
             return Ok(PeerInfoConnect { addr: addr, id: id, pub_cert: rustls::Certificate(pub_cert.unwrap()) });
+        },
+        ProtocolCommand::Error(msg) => {
+            return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, msg)));
         },
         _ => Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "unexpected command"))),
     }

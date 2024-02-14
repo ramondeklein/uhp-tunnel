@@ -5,7 +5,7 @@ use quinn::{Connection, RecvStream, SendStream};
 use tokio::io::{split, AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 
-pub async fn listen(connection: Connection, tunnel_endpoint: SocketAddr) {
+pub async fn listen(connection: Connection, tunnel_endpoint: String) {
     let remote_addr = connection.remote_address();
     println!("{}: listening for incoming connections", remote_addr);
 
@@ -15,26 +15,17 @@ pub async fn listen(connection: Connection, tunnel_endpoint: SocketAddr) {
                 let quic_id = quic_stream.0.id().index();
                 println!("{}/{}: got a new QUIC stream", remote_addr, quic_id);
         
+                let connect_host = tunnel_endpoint.clone();
                 tokio::task::spawn(async move {
-                    match TcpStream::connect(&tunnel_endpoint).await {
+                    match TcpStream::connect(&connect_host).await {
                         Ok(mut tcp_stream) => {
-                            println!(
-                                "{}/{}: connected to connect to '{}'",
-                                remote_addr, quic_id, tunnel_endpoint
-                            );
+                            println!("{}/{}: connected to connect to '{}'", remote_addr, quic_id, connect_host);
                             let msg = format!("{}/{}: ", remote_addr, quic_id);
-                            let (qtt, ttq) =
-                                forward_traffic(&msg, &mut tcp_stream, quic_stream).await;
-                            println!(
-                                "{}/{}: finished ({} bytes read, {} bytes written)",
-                                remote_addr, quic_id, qtt, ttq
-                            );
+                            let (qtt, ttq) = forward_traffic(&msg, &mut tcp_stream, quic_stream).await;
+                            println!("{}/{}: finished ({} bytes read, {} bytes written)", remote_addr, quic_id, qtt, ttq);
                         }
                         Err(e) => {
-                            eprintln!(
-                                "{}/{}: unable to connect to '{}': {}",
-                                remote_addr, quic_id, tunnel_endpoint, e
-                            );
+                            eprintln!("{}/{}: unable to connect to '{}': {}", remote_addr, quic_id, connect_host, e);
                         }
                     }
                 });
@@ -47,23 +38,16 @@ pub async fn listen(connection: Connection, tunnel_endpoint: SocketAddr) {
     }
 }
 
-pub async fn connect(connection: Connection) {
+pub async fn connect(listen_addr: &SocketAddr, connection: Connection) {
     let remote_addr = connection.remote_address();
     println!("{}: established QUIC connection", remote_addr);
 
-    let listen_addr = SocketAddr::from(([127, 0, 0, 1], 21473));
     match TcpListener::bind(listen_addr).await {
         Ok(tcp_listener) => {
-            println!(
-                "{}: waiting for TCP to accept on {}",
-                remote_addr, listen_addr
-            );
+            println!("{}: waiting for TCP to accept on {}", remote_addr, listen_addr);
         
             while let Ok((mut tcp_stream, peer_addr)) = tcp_listener.accept().await {
-                println!(
-                    "{}: accepted TCP connection from {}",
-                    remote_addr, peer_addr
-                );
+                println!("{}: accepted TCP connection from {}", remote_addr, peer_addr);
         
                 match connection.open_bi().await {
                     Ok(quic_stream) => {
@@ -72,10 +56,7 @@ pub async fn connect(connection: Connection) {
                         tokio::task::spawn(async move {
                             let msg = format!("{}/{}: ", remote_addr, quic_id);
                             let (qtt, ttq) = forward_traffic(&msg, &mut tcp_stream, quic_stream).await;
-                            println!(
-                                "{}/{}: finished ({} bytes read, {} bytes written)",
-                                remote_addr, quic_id, qtt, ttq
-                            );
+                            println!("{}/{}: finished ({} bytes read, {} bytes written)", remote_addr, quic_id, qtt, ttq);
                         });
                     },
                     Err(err) => {
@@ -85,17 +66,11 @@ pub async fn connect(connection: Connection) {
                 }
             }
         },
-        Err(err) => {
-            eprintln!("{}: error binding to local endpoint: {}", remote_addr, err);
-        }
+        Err(err) => eprintln!("{}: error binding to local endpoint: {}", remote_addr, err)
     }
 }
 
-async fn forward_traffic(
-    name: &String,
-    tcp_stream: &mut TcpStream,
-    quic_stream: (SendStream, RecvStream),
-) -> (usize, usize) {
+async fn forward_traffic(name: &String, tcp_stream: &mut TcpStream, quic_stream: (SendStream, RecvStream)) -> (usize, usize) {
     let (mut bytes_read, mut bytes_written) = (0_usize, 0_usize);
     {
         let (s, r) = quic_stream;
@@ -138,12 +113,7 @@ async fn quic_to_tcp(
     }
 }
 
-async fn tcp_to_quic(
-    name: &String,
-    tr: &mut ReadHalf<&mut TcpStream>,
-    mut s: SendStream,
-    bytes: &mut usize,
-) {
+async fn tcp_to_quic(name: &String, tr: &mut ReadHalf<&mut TcpStream>, mut s: SendStream, bytes: &mut usize) {
     let mut rx_bytes = [0u8; 1000];
     loop {
         match tr.read(&mut rx_bytes).await {

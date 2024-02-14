@@ -50,74 +50,48 @@ impl Server {
         let server_config = quinn::ServerConfig::with_single_cert(certs, priv_key)?;
         let endpoint = quinn::Endpoint::server(server_config, addr)?;
 
+        println!("waiting for an incoming QUIC connection");
         loop {
-            println!("waiting for an incoming QUIC connection");
             match endpoint.accept().await {
-                Some(c) => {
-                    // TODO: Run this in a separate task to avoid blocking
-                    let connection = c.await.unwrap();
-                    let src_addr = connection.remote_address();
-                    println!("{}: got a new QUIC connection", src_addr);
-
-                    let peers = self.peers.clone();
-
-                    tokio::spawn(async move {
-                        while let Ok((send_stream, mut recv_stream)) = connection.accept_bi().await
-                        {
-                            let quic_id = recv_stream.id().index();
-                            println!("{}/{}: got a new QUIC stream", src_addr, quic_id);
-                            let mut buf = vec![0u8; CTRL_SIZE];
-                            match recv_stream.read(&mut buf).await {
-                                Ok(Some(n)) => {
-                                    match bincode::deserialize::<ProtocolCommand>(&buf[..n])
-                                        .unwrap()
-                                    {
-                                        ProtocolCommand::Advertise { id, pub_cert } => {
-                                            advertise_handler(
-                                                &peers,
-                                                src_addr,
-                                                id,
-                                                pub_cert,
-                                                send_stream,
-                                            )
-                                            .await;
+                Some(c) => match c.await {
+                    Ok(connection) => {
+                        let src_addr = connection.remote_address();
+                        println!("{}: got a new QUIC connection", src_addr);
+    
+                        let peers = self.peers.clone();
+    
+                        tokio::spawn(async move {
+                            while let Ok((send_stream, mut recv_stream)) = connection.accept_bi().await
+                            {
+                                let quic_id = recv_stream.id().index();
+                                println!("{}/{}: got a new QUIC stream", src_addr, quic_id);
+                                let mut buf = vec![0u8; CTRL_SIZE];
+                                match recv_stream.read(&mut buf).await {
+                                    Ok(Some(n)) => {
+                                        match bincode::deserialize::<ProtocolCommand>(&buf[..n]).unwrap()
+                                        {
+                                            ProtocolCommand::Advertise { id, pub_cert } 
+                                                => advertise_handler(&peers, src_addr, id, pub_cert, send_stream).await,
+                                            ProtocolCommand::Connect { src_id, dest_id, tunnel_endpoint } 
+                                                => connect_handler(&peers, src_addr, send_stream, src_id, dest_id, tunnel_endpoint).await,
+                                            _ => { 
+                                                eprintln!("{}/{}: invalid command received.", src_addr, quic_id);
+                                                break;
+                                            }
                                         }
-                                        ProtocolCommand::Connect {
-                                            src_id,
-                                            dest_id,
-                                            tunnel_endpoint,
-                                        } => {
-                                            connect_handler(
-                                                &peers,
-                                                src_addr,
-                                                send_stream,
-                                                src_id,
-                                                dest_id,
-                                                tunnel_endpoint,
-                                            )
-                                            .await;
-                                        }
-                                        _ => { 
-                                            eprintln!("{}/{}: invalid command received.", src_addr, quic_id);
-                                            break;
-                                        }
-                                    }
-                                }
-                                Ok(None) => {
-                                    eprintln!("Nothing read");
-                                }
-                                Err(e) => {
-                                    eprintln!("{e}");
+                                    },
+                                    Ok(None) => eprintln!("{}/{}: nothing read", src_addr, quic_id),
+                                    Err(e) => eprintln!("{e}"),
                                 }
                             }
-                        }
-                        println!("{}: QUIC connection closed.", src_addr);
-                        unadvertise_handler(&peers,src_addr).await;
-                    });
+                            println!("{}: QUIC connection closed.", src_addr);
+                            unadvertise_handler(&peers,src_addr).await;
+                        });
+    
+                    },
+                    Err(err) => eprintln!("Error during handshake: {}", err)
                 }
-                None => {
-                    return Ok(());
-                }
+                None => return Ok(())
             };
         }
     }
@@ -127,24 +101,16 @@ impl Server {
 ///
 /// The handler stores the advertised information in its administration for
 /// the specified peer identifier.
-async fn advertise_handler(
-    peers: &Arc<Mutex<HashMap<String, PeerInfo>>>,
-    src_addr: SocketAddr,
-    id: String,
-    cert: Vec<u8>,
-    send_stream: SendStream,
-) {
+async fn advertise_handler(peers: &Arc<Mutex<HashMap<String, PeerInfo>>>, src_addr: SocketAddr, id: String, cert: Vec<u8>, send_stream: SendStream) {
     println!("{src_addr}: Listener '{id}' registered");
     let mut peers = peers.lock().await;
     let data = Arc::new(Mutex::new(send_stream));
-    peers.insert(
-        id,
-        PeerInfo {
-            addr: src_addr,
-            certificate: rustls::Certificate(cert),
-            send_stream: data,
-        },
-    );
+    let peer_info = PeerInfo {
+        addr: src_addr,
+        certificate: rustls::Certificate(cert),
+        send_stream: data,
+    };
+    peers.insert(id, peer_info);
 }
 
 /// Handle a peer's un-advertisement
@@ -161,9 +127,7 @@ async fn unadvertise_handler(
             println!("{}: Listener '{}' unregistered.", src_addr, id);
             peers.remove(&id);
         },
-        None => {
-            println!("{}: Listener disconnected, but has never registered.", src_addr);
-        }
+        None => println!("{}: Listener disconnected, but has never registered.", src_addr)
     }  
 }
 
@@ -192,37 +156,28 @@ async fn connect_handler(
             }
         }
         Some(peer_info) => {
-            println!(
-                "Peer '{src_id}' requests connection to peer '{}' ({})",
-                dest_id, peer_info.addr
-            );
+            println!("Peer '{src_id}' requests connection to peer '{}' ({})", dest_id, peer_info.addr);
             let mut dest_send_stream = peer_info.send_stream.lock().await;
 
             // send to the receiving peer
-            if let Err(err) = send_command(
-                &mut dest_send_stream,
-                &ProtocolCommand::ConnectRequest {
-                    id: src_id.clone(),
-                    addr: src_addr,
-                    tunnel_endpoint: tunnel_endpoint,
-                },
-            )
-            .await
+            let cmd = ProtocolCommand::ConnectRequest {
+                id: src_id.clone(),
+                addr: src_addr,
+                tunnel_endpoint: tunnel_endpoint,
+            };
+            if let Err(err) = send_command(&mut dest_send_stream, &cmd).await
             {
                 eprintln!("unable to send 'ConnectRequest' to '{}' ('{}'): {}", src_id, src_addr, err);
                 return
             }
 
             // send to the source peer
-            if let Err(err) = send_command(
-                &mut src_send_stream,
-                &ProtocolCommand::ConnectResponse {
-                    id: dest_id.clone(),
-                    addr: peer_info.addr,
-                    pub_cert: Some(peer_info.certificate.as_ref().to_vec()),
-                },
-            )
-            .await {
+            let cmd = ProtocolCommand::ConnectResponse {
+                id: dest_id.clone(),
+                addr: peer_info.addr,
+                pub_cert: Some(peer_info.certificate.as_ref().to_vec()),
+            };
+            if let Err(err) = send_command(&mut src_send_stream, &cmd).await {
                 eprintln!("unable to send 'ConnectResponse' to '{}' ('{}'): {}", dest_id, peer_info.addr, err);
                 return
             }

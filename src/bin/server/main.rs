@@ -1,5 +1,6 @@
 pub mod server;
 
+use hole_punching::udp_hole_punching::protocol::DEFAULT_SERVER_PORT;
 use rustls::{Certificate, PrivateKey};
 use server::Server;
 use std::{error::Error, fs::File, io::BufReader, process};
@@ -18,23 +19,34 @@ async fn main() {
 }
 
 async fn run() -> Result<(), Box<dyn Error>> {
+    let default_bind = format!("0.0.0.0:{}", DEFAULT_SERVER_PORT);
+
     let cmd = clap::Command::new("server")
         .bin_name("server")
         .about("UDP-tunnel server")
         .arg(
-            clap::arg!(-b --"bind" "Server end-point (i.e. 0.0.0.0:21473)")
+            clap::Arg::new("bind")
+                .short('b')
+                .long("bind")
+                .help(format!("Server end-point (i.e. {})", default_bind))
+                .default_value(default_bind)
                 .action(clap::ArgAction::Set)
-                .required(true)
                 .value_parser(clap::value_parser!(std::net::SocketAddr)),
         )
         .arg(
-            clap::arg!(-c --"certificate-file" "Certificate to use for QUIC protocol")
+            clap::Arg::new("certificate-file")
+                .short('c')
+                .long("certificate-file")
+                .help("Certificate to use for QUIC protocol")
                 .action(clap::ArgAction::Set)
                 .required(true)
                 .value_parser(clap::value_parser!(String)),
         )
         .arg(
-            clap::arg!(-p --"private-key-file" "Private key to use for QUIC protocol")
+            clap::Arg::new("private-key-file")
+                .short('k')
+                .long("private-key-file")
+                .help("Private key to use for QUIC protocol")
                 .action(clap::ArgAction::Set)
                 .required(true)
                 .value_parser(clap::value_parser!(String)),

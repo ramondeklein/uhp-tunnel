@@ -27,3 +27,6 @@ pub enum ProtocolCommand {
     /// a hole in the UDP NAT table (peer to peer)
     Hi { id: String } = 5,
 }
+
+/// Default port of the UDP hole punching server protocol
+pub const DEFAULT_SERVER_PORT : u16 = 21473;
